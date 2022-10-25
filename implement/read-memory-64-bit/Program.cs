@@ -7,7 +7,7 @@ using McMaster.Extensions.CommandLineUtils;
 
 namespace read_memory_64_bit;
 
-class Program
+public class Program
 {
     static string AppVersionId => "2022-05-01";
 
@@ -362,6 +362,121 @@ class Program
 
         return ulong.Parse(asString);
     }
+	
+	static byte[] GetProcessSample(int processId)
+    {
+        var process = System.Diagnostics.Process.GetProcessById(processId);
+
+        var (committedRegions, logEntries) = EveOnline64.ReadCommittedMemoryRegionsWithContentFromProcessId(processId);
+
+        return ProcessSample.ZipArchiveFromProcessNoBmp(
+            committedRegions,
+            logEntries);
+    }
+	
+	// Calling this from python. Basically a simplified version of Main.readMemoryEveOnlineCmd
+	// Have to ged rid of zipping for better speed on first run
+	public string MainFromPython(int processId, string rootAddressArg)
+	{
+        (IMemoryReader, IImmutableList<ulong>) GetMemoryReaderAndRootAddressesFromProcessSampleFile(byte[] processSampleFile)
+            {
+                var processSampleId = Pine.CommonConversion.StringBase16FromByteArray(
+                    Pine.CommonConversion.HashSHA256(processSampleFile));
+
+                Console.WriteLine($"Reading from process sample {processSampleId}.");
+
+                var processSampleUnpacked = ProcessSample.ProcessSampleFromZipArchive(processSampleFile);
+
+                var memoryReader = new MemoryReaderFromProcessSample(processSampleUnpacked.memoryRegions);
+
+                var searchUIRootsStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+                var memoryRegions =
+                    processSampleUnpacked.memoryRegions
+                    .Select(memoryRegion => (memoryRegion.baseAddress, length: memoryRegion.content.Value.Length))
+                    .ToImmutableList();
+
+                var uiRootCandidatesAddresses =
+                    EveOnline64.EnumeratePossibleAddressesForUIRootObjects(memoryRegions, memoryReader)
+                    .ToImmutableList();
+
+                searchUIRootsStopwatch.Stop();
+
+                Console.WriteLine($"Found {uiRootCandidatesAddresses.Count} candidates for UIRoot in {(int)searchUIRootsStopwatch.Elapsed.TotalSeconds} seconds: " + string.Join(",", uiRootCandidatesAddresses.Select(address => $"0x{address:X}")));
+
+                return (memoryReader, uiRootCandidatesAddresses);
+            }
+            
+        (IMemoryReader, IImmutableList<ulong>) GetMemoryReaderAndRootAddresses()
+            {
+                if (rootAddressArg.Length != 0)
+                {
+                    return (new MemoryReaderFromLiveProcess(processId), ImmutableList.Create(ParseULong(rootAddressArg)));
+                }
+
+                return GetMemoryReaderAndRootAddressesFromProcessSampleFile(GetProcessSample(processId));
+            }	
+
+        var (memoryReader, uiRootCandidatesAddresses) = GetMemoryReaderAndRootAddresses();
+
+        IImmutableList<UITreeNode> ReadUITrees() =>
+        uiRootCandidatesAddresses
+        .Select(uiTreeRoot => EveOnline64.ReadUITreeFromAddress(uiTreeRoot, memoryReader, 99))
+        .Where(uiTree => uiTree != null)
+        .ToImmutableList();
+
+        var readUiTreesStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var uiTrees = ReadUITrees();
+
+        readUiTreesStopwatch.Stop();
+
+        var uiTreesWithStats =
+            uiTrees
+            .Select(uiTree =>
+            new
+            {
+                uiTree = uiTree,
+                nodeCount = uiTree.EnumerateSelfAndDescendants().Count()
+            })
+            .OrderByDescending(uiTreeWithStats => uiTreeWithStats.nodeCount)
+            .ToImmutableList();
+
+        var uiTreesReport =
+            uiTreesWithStats
+            .Select(uiTreeWithStats => $"\n0x{uiTreeWithStats.uiTree.pythonObjectAddress:X}: {uiTreeWithStats.nodeCount} nodes.")
+            .ToImmutableList();
+
+        Console.WriteLine($"Read {uiTrees.Count} UI trees in {(int)readUiTreesStopwatch.Elapsed.TotalMilliseconds} milliseconds:" + string.Join("", uiTreesReport));
+
+        var largestUiTree =
+            uiTreesWithStats
+            .OrderByDescending(uiTreeWithStats => uiTreeWithStats.nodeCount)
+            .FirstOrDefault().uiTree;
+
+        if (largestUiTree != null)
+        {
+            var uiTreePreparedForFile = largestUiTree;
+
+            var serializeStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var uiTreeAsJson = EveOnline64.SerializeMemoryReadingNodeToJson(uiTreePreparedForFile);
+
+            serializeStopwatch.Stop();
+
+            Console.WriteLine(
+                "Serialized largest tree to " + uiTreeAsJson.Length + " characters of JSON in " +
+                serializeStopwatch.ElapsedMilliseconds + " milliseconds.");
+
+            return uiTreeAsJson;
+        }
+        else
+        {
+            Console.WriteLine("No largest UI tree.");
+            return ("No");
+        }
+        return ("No");
+	}
 }
 
 public class EveOnline64
@@ -1525,6 +1640,20 @@ class ProcessSample
 
         return Pine.ZipArchive.ZipArchiveFromEntries(zipArchiveEntries);
     }
+	
+	static public byte[] ZipArchiveFromProcessNoBmp(
+        IImmutableList<SampleMemoryRegion> memoryRegions,
+        IImmutableList<string> logEntries)
+        {
+        Console.WriteLine($"ZIPing");
+        var zipArchiveEntries =
+            memoryRegions.ToImmutableDictionary(
+                region => (IImmutableList<string>)(new[] { "Process", "Memory", $"0x{region.baseAddress:X}" }.ToImmutableList()),
+                region => region.content.Value.ToArray())
+                .Add(new[] { "copy-memory-log" }.ToImmutableList(), System.Text.Encoding.UTF8.GetBytes(String.Join("\n", logEntries)));
+
+        return Pine.ZipArchive.ZipArchiveFromEntries(zipArchiveEntries);
+        }
 
     static public (IImmutableList<SampleMemoryRegion> memoryRegions, IImmutableList<string> copyMemoryLog) ProcessSampleFromZipArchive(byte[] sampleFile)
     {
