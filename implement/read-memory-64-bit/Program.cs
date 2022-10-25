@@ -378,21 +378,14 @@ public class Program
 	// Have to ged rid of zipping for better speed on first run
 	public string MainFromPython(int processId, string rootAddressArg)
 	{
-        (IMemoryReader, IImmutableList<ulong>) GetMemoryReaderAndRootAddressesFromProcessSampleFile(byte[] processSampleFile)
+        (IMemoryReader, IImmutableList<ulong>) GetMemoryReaderAndRootAddressesFromProcessSampleFile(IImmutableList<SampleMemoryRegion> committedRegions)
             {
-                var processSampleId = Pine.CommonConversion.StringBase16FromByteArray(
-                    Pine.CommonConversion.HashSHA256(processSampleFile));
-
-                Console.WriteLine($"Reading from process sample {processSampleId}.");
-
-                var processSampleUnpacked = ProcessSample.ProcessSampleFromZipArchive(processSampleFile);
-
-                var memoryReader = new MemoryReaderFromProcessSample(processSampleUnpacked.memoryRegions);
+                var memoryReader = new MemoryReaderFromProcessSample(committedRegions);
 
                 var searchUIRootsStopwatch = System.Diagnostics.Stopwatch.StartNew();
 
                 var memoryRegions =
-                    processSampleUnpacked.memoryRegions
+                    committedRegions
                     .Select(memoryRegion => (memoryRegion.baseAddress, length: memoryRegion.content.Value.Length))
                     .ToImmutableList();
 
@@ -413,8 +406,10 @@ public class Program
                 {
                     return (new MemoryReaderFromLiveProcess(processId), ImmutableList.Create(ParseULong(rootAddressArg)));
                 }
-
-                return GetMemoryReaderAndRootAddressesFromProcessSampleFile(GetProcessSample(processId));
+                
+                var (committedRegions, logEntries) = EveOnline64.ReadCommittedMemoryRegionsWithContentFromProcessId(processId);
+                
+                return GetMemoryReaderAndRootAddressesFromProcessSampleFile(committedRegions);
             }	
 
         var (memoryReader, uiRootCandidatesAddresses) = GetMemoryReaderAndRootAddresses();
