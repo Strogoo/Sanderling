@@ -376,7 +376,7 @@ public class Program
 	
 	// Calling this from python. Basically a simplified version of Main.readMemoryEveOnlineCmd
 	// Have to ged rid of zipping for better speed on first run
-	public string MainFromPython(int processId, string rootAddressArg)
+	public string MainFromPython(int processId, string rootAddressArg, bool removeOtherDictEntries, bool printLogToConsole)
 	{
         (IMemoryReader, IImmutableList<ulong>) GetMemoryReaderAndRootAddressesFromProcessSampleFile(IImmutableList<SampleMemoryRegion> committedRegions)
             {
@@ -442,7 +442,11 @@ public class Program
             .Select(uiTreeWithStats => $"\n0x{uiTreeWithStats.uiTree.pythonObjectAddress:X}: {uiTreeWithStats.nodeCount} nodes.")
             .ToImmutableList();
 
-        Console.WriteLine($"Read {uiTrees.Count} UI trees in {(int)readUiTreesStopwatch.Elapsed.TotalMilliseconds} milliseconds:" + string.Join("", uiTreesReport));
+        if (printLogToConsole == true)
+        {
+            Console.WriteLine($"Read {uiTrees.Count} UI trees in {(int)readUiTreesStopwatch.Elapsed.TotalMilliseconds} milliseconds:" + string.Join("", uiTreesReport));
+        }
+        
 
         var largestUiTree =
             uiTreesWithStats
@@ -452,6 +456,11 @@ public class Program
         if (largestUiTree != null)
         {
             var uiTreePreparedForFile = largestUiTree;
+            
+            if (removeOtherDictEntries == true)
+            {
+                uiTreePreparedForFile = uiTreePreparedForFile.WithOtherDictEntriesRemoved();
+            }    
 
             var serializeStopwatch = System.Diagnostics.Stopwatch.StartNew();
 
@@ -459,9 +468,11 @@ public class Program
 
             serializeStopwatch.Stop();
 
-            Console.WriteLine(
+            if (printLogToConsole == true){
+                 Console.WriteLine(
                 "Serialized largest tree to " + uiTreeAsJson.Length + " characters of JSON in " +
-                serializeStopwatch.ElapsedMilliseconds + " milliseconds.");
+                serializeStopwatch.ElapsedMilliseconds + " milliseconds.");       
+            }
 
             return uiTreeAsJson;
         }
