@@ -8,7 +8,7 @@ using McMaster.Extensions.CommandLineUtils;
 
 namespace read_memory_64_bit;
 
-class Program
+public class Program
 {
     static string AppVersionId => "2025-04-20";
 
@@ -289,6 +289,104 @@ class Program
             beginMainWindowClientAreaScreenshotBmp: beginMainWindowClientAreaScreenshotBmp,
             endMainWindowClientAreaScreenshotBmp: endMainWindowClientAreaScreenshotBmp);
     }
+
+    public string MainFromPython(int processId, string rootAddressArg, bool removeOtherDictEntriesArgument, bool printLogToConsole)
+    {
+        int warmupIter = 0;
+
+
+        (IMemoryReader, IImmutableList<ulong>) GetMemoryReaderAndRootAddresses()
+        {
+         
+            var possibleRootAddresses = 0 < rootAddressArg?.Length ? ImmutableList.Create(ParseULong(rootAddressArg)) : EveOnline64.EnumeratePossibleAddressesForUIRootObjectsFromProcessId(processId);
+
+            return (new MemoryReaderFromLiveProcess(processId), possibleRootAddresses);
+            
+        }
+
+        var (memoryReader, uiRootCandidatesAddresses) = GetMemoryReaderAndRootAddresses();
+
+        IImmutableList<UITreeNode> ReadUITrees() =>
+            uiRootCandidatesAddresses
+            .Select(uiTreeRoot => EveOnline64.ReadUITreeFromAddress(uiTreeRoot, memoryReader, 99))
+            .Where(uiTree => uiTree != null)
+            .ToImmutableList();
+
+        if (warmupIter != 0)
+        {
+            Console.WriteLine("Performing " + warmupIter + " warmup iterations...");
+
+            for (var i = 0; i < warmupIter; i++)
+            {
+                ReadUITrees().ToList();
+                System.Threading.Thread.Sleep(1111);
+            }
+        }
+
+        var readUiTreesStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var uiTrees = ReadUITrees();
+
+        readUiTreesStopwatch.Stop();
+
+        var uiTreesWithStats =
+            uiTrees
+            .Select(uiTree =>
+            new
+            {
+                uiTree = uiTree,
+                nodeCount = uiTree.EnumerateSelfAndDescendants().Count()
+            })
+            .OrderByDescending(uiTreeWithStats => uiTreeWithStats.nodeCount)
+            .ToImmutableList();
+
+        var uiTreesReport =
+            uiTreesWithStats
+            .Select(uiTreeWithStats => $"\n0x{uiTreeWithStats.uiTree.pythonObjectAddress:X}: {uiTreeWithStats.nodeCount} nodes.")
+            .ToImmutableList();
+
+        if (printLogToConsole == true)
+        {
+            Console.WriteLine($"Read {uiTrees.Count} UI trees in {(int)readUiTreesStopwatch.Elapsed.TotalMilliseconds} milliseconds:" + string.Join("", uiTreesReport));
+        }
+
+        var largestUiTree =
+            uiTreesWithStats
+            .OrderByDescending(uiTreeWithStats => uiTreeWithStats.nodeCount)
+            .FirstOrDefault().uiTree;
+
+        if (largestUiTree != null)
+        {
+            var uiTreePreparedForFile = largestUiTree;
+
+            if (removeOtherDictEntriesArgument)
+            {
+                uiTreePreparedForFile = uiTreePreparedForFile.WithOtherDictEntriesRemoved();
+            }
+
+            var serializeStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var uiTreeAsJson = EveOnline64.SerializeMemoryReadingNodeToJson(uiTreePreparedForFile);
+
+            serializeStopwatch.Stop();
+
+            if (printLogToConsole == true)
+            {
+                Console.WriteLine(
+                "Serialized largest tree to " + uiTreeAsJson.Length + " characters of JSON in " +
+                serializeStopwatch.ElapsedMilliseconds + " milliseconds.");
+            }
+
+            return uiTreeAsJson;
+        }
+        else
+        {
+            Console.WriteLine("No largest UI tree.");
+            return "False";
+        }
+    }
+
+
 
     //  Screenshot implementation found at https://github.com/Viir/bots/blob/225c680115328d9ba0223760cec85d56f2ea9a87/implement/templates/locate-object-in-window/src/BotEngine/VolatileHostWindowsApi.elm#L479-L557
 

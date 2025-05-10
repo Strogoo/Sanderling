@@ -1,0 +1,7 @@
+.vs/ProjectSettings.json
+.vs/Sanderling/FileContentIndex/da4faf34-1577-4452-ae91-393e9fe55643.vsidx
+*.vsidx
+.vs/Sanderling/v17/.wsuo
+*.sqlite
+*.sqlite-journal
+*.json
